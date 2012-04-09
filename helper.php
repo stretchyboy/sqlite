@@ -709,10 +709,10 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
       }
       else
       {
-        $regex = '/^SELECT\s+(?:ALL\s+|DISTINCT\s+)?(?:.*?)\s+FROM\s+(.*)$/i';
-        if (preg_match($regex, $res->queryString, $output) > 0) {
+        $regex = '/^SELECT\s+(?:ALL\s+|DISTINCT\s+)?(?:.*?)\s+FROM\s+(.*)/i';
+        $sQuery = str_replace("\n", " ", $res->queryString);
+        if (preg_match($regex, $sQuery, $output) > 0) {
             $stmt = $this->db->query("SELECT COUNT(*) FROM {$output[1]}", PDO::FETCH_NUM);
-
             return $stmt->fetchColumn();
         }
 
