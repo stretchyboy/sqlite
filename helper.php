@@ -416,8 +416,11 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
      * @param arguments...
      */
     function query(){
-        if(!$this->db) return false;
-
+        if(!$this->db)
+        {
+            msg("SQLite: $this->dbname missing at query ",-1);
+            return false;
+        }
         // get function arguments
         $args = func_get_args();
         $sql  = trim(array_shift($args));
@@ -477,7 +480,7 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
           $result = false;
 
           $res = $this->db->query($sql);
-
+        
           if(!$res){
             $err = $this->db->errorInfo();
               msg($err[2].':<br /><pre>'.hsc($sql).'</pre>',-1);
