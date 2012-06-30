@@ -90,18 +90,31 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
 
         $this->dbname = $dbname;
 
-        $fileextension = '.sqlite';
+        // Separate the database files to prevent not-requested autoupgrades.
+        if($this->extension == DOKU_EXT_SQLITE){
+            $fileextension = '.sqlite';
+        }else{
+            $fileextension = '.sqlite3';
+        }
 
         $this->dbfile = $conf['metadir'].'/'.$dbname.$fileextension;
 
         $init   = (!@file_exists($this->dbfile) || ((int) @filesize($this->dbfile)) < 3);
 
+        //first line tell the format of db file http://marc.info/?l=sqlite-users&m=109383875408202
+        $firstline=@file_get_contents($this->dbfile,false,null,0,15);
+
         if($this->extension == DOKU_EXT_SQLITE)
         {
+          if($firstline=='SQLite format 3'){
+              msg("SQLite: failed to open SQLite '".$this->dbname."' database (DB has a sqlite3 format instead of sqlite2 format.)",-1);
+              return false;
+          }
+
           $error='';
           $this->db = sqlite_open($this->dbfile, 0666, $error);
           if(!$this->db){
-              msg("SQLite: failed to open SQLite ".$this->dbname." database ($error)",-1);
+              msg("SQLite: failed to open SQLite '".$this->dbname."' database ($error)",-1);
               return false;
           }
 
@@ -112,12 +125,34 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
         }
         else
         {
+          if($init){
+              $oldDbfile = substr($this->dbfile,0,-1);
+
+              if(@file_exists($oldDbfile)){
+                  $notfound_msg="SQLite: '".$this->dbname.$fileextension."' database not found. In the meta directory is '".$this->dbname.substr($fileextension,0,-1)."' available. ";
+
+                  $firstline=@file_get_contents($oldDbfile,false,null,0,15);
+                  if($firstline=='SQLite format 3'){
+                      msg($notfound_msg."PDO sqlite needs you rename manual the file extension to '.sqlite3' .",-1);
+                      return false;
+                  }else{
+                      msg($notfound_msg."PDO sqlite needs you upgrade manual this sqlite2 db to sqlite3 format.",-1);
+                      return false;
+                  }
+              }
+          }else{
+              if($firstline!='SQLite format 3'){
+                  msg("SQLite: failed to open SQLite '".$this->dbname."' database (DB has not a sqlite3 format.)",-1);
+                  return false;
+              }
+          }
+
           $dsn = 'sqlite:'.$this->dbfile;
 
           try {
               $this->db = new PDO($dsn);
           } catch (PDOException $e) {
-            msg("SQLite: failed to open SQLite ".$this->dbname." database (".$e->getMessage().")",-1);
+            msg("SQLite: failed to open SQLite '".$this->dbname."' database (".$e->getMessage().")",-1);
               return false;
           }
           $this->db->sqliteCreateAggregate('group_concat',
@@ -153,7 +188,7 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
         }else{
             $current = $this->_currentDBversion();
             if(!$current){
-                msg('SQLite: no DB version found. '.$this->dbname.' DB probably broken.',-1);
+                msg("SQLite: no DB version found. '".$this->dbname."' DB probably broken.",-1);
                 return false;
             }
         }
@@ -161,7 +196,7 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
         // in case of init, add versioning table
         if($init){
             if(!$this->_runupdatefile(dirname(__FILE__).'/db.sql',0)){
-                msg('SQLite: '.$this->dbname.' database initialization failed', -1);
+                  msg("SQLite: '".$this->dbname."' database upgrade failed for version ", -1);
                 return false;
             }
         }
@@ -174,7 +209,7 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
             $file = sprintf($updatedir.'/update%04d.sql',$i);
             if(file_exists($file)){
                 if(!$this->_runupdatefile($file,$i)){
-                    msg('SQLite: '.$this->dbname.' database upgrade failed for version '.$i, -1);
+                    msg("SQLite: '".$this->dbname."' database upgrade failed for version ".$i, -1);
                     return false;
                 }
             }
@@ -408,6 +443,20 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
     }
 
     /**
+     * Registers a User Defined Function for use in SQL statements
+     */
+    function create_function($function_name,$callback,$num_args){
+        if($this->extension == DOKU_EXT_SQLITE )
+        {
+          sqlite_create_function($this->db,$function_name,$callback,$num_args);
+        }
+        else
+        {
+          $this->db->sqliteCreateFunction($function_name,$callback,$num_args);
+        }
+    }
+
+    /**
      * Execute a query with the given parameters.
      *
      * Takes care of escaping
@@ -477,8 +526,6 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
         }
         else
         {
-          $result = false;
-
           $res = $this->db->query($sql);
         
           if(!$res){
@@ -505,11 +552,8 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
         }
         else
         {
+          if(!$res) return $data;
           $data = $res->fetchAll(PDO::FETCH_ASSOC);
-          if(!count(data))
-          {
-            return false;
-          }
         }
         return $data;
     }
@@ -528,23 +572,9 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
         }
         else
         {
-          //very dirty replication of the same functionality (really must look at cursors)
-          $data = array();
-          //do we need to rewind?
-          $data = $res->fetchAll(PDO::FETCH_ASSOC);
-          if(!count(data))
-          {
-            return false;
-          }
+          if(!$res) return false;
 
-          if(!isset($data[$rownum]))
-          {
-            return false;
-          }
-          else
-          {
-            return $data[$rownum];
-          }
+          return $res->fetch(PDO::FETCH_ASSOC,PDO::FETCH_ORI_ABS,$rownum);
         }
     }
 
@@ -559,12 +589,14 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
       }
       else
       {
-        $data = $res->fetchAll(PDO::FETCH_NUM);
-        if(!count(data))
+        if(!$res) return false;
+        
+        $data = $res->fetch(PDO::FETCH_NUM,PDO::FETCH_ORI_ABS,0);
+        if(!count($data))
         {
           return false;
         }
-        return $data[0][0];
+        return $data[0];
       }
     }
 
@@ -681,6 +713,8 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
       }
       else
       {
+        if(!$res) return false;
+
         return $res->fetch(PDO::FETCH_NUM);
       }
     }
@@ -697,14 +731,19 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
       }
       else
       {
-       return $res->fetch(PDO::FETCH_ASSOC);
+        if(!$res) return false;
+
+        return $res->fetch(PDO::FETCH_ASSOC);
       }
     }
 
 
     /**
-    * Count the number of records in rsult
-    */
+
+     * Count the number of records in result
+     *
+     * This function is really inperformant in PDO and should be avoided!
+     */
     function res2count($res) {
       if($this->extension == DOKU_EXT_SQLITE )
       {
@@ -712,14 +751,8 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
       }
       else
       {
-        $regex = '/^SELECT\s+(?:ALL\s+|DISTINCT\s+)?(?:.*?)\s+FROM\s+(.*)/i';
-        $sQuery = str_replace("\n", " ", $res->queryString);
-        if (preg_match($regex, $sQuery, $output) > 0) {
-            $stmt = $this->db->query("SELECT COUNT(*) FROM {$output[1]}", PDO::FETCH_NUM);
-            return $stmt->fetchColumn();
-        }
-
-        return false;
+        if(!$res) return false;
+        return count($res->fetch(PDO::FETCH_NUM));
       }
     }
 
@@ -735,6 +768,8 @@ class helper_plugin_sqlite extends DokuWiki_Plugin {
       }
       else
       {
+        if(!$res) return false;
+
         return $res->rowCount();
       }
     }
